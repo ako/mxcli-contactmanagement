@@ -1,0 +1,122 @@
+-- Popup and detail buttons that close the page they are on.
+--
+-- Why this exists: MDL's SAVE_CHANGES / CANCEL_CHANGES / DELETE map to the
+-- client's save/cancel/delete actions, which commit or roll back the object but
+-- leave the page open. On a popup that means the dialog stays up after Save
+-- (verified in a browser: the row appeared in the list behind the still-open
+-- dialog). There is no close-page property on the button to set — ClosePage /
+-- CloseAction / Close / CloseOnSave are all rejected by ALTER PAGE — so the
+-- buttons call microflows that commit and then close.
+
+CREATE MICROFLOW ContactManagement.ACT_Address_Save ($Address: ContactManagement.Address)
+BEGIN
+  COMMIT $Address;
+  CLOSE PAGE;
+END;
+
+CREATE MICROFLOW ContactManagement.ACT_Address_Cancel ($Address: ContactManagement.Address)
+BEGIN
+  ROLLBACK $Address;
+  CLOSE PAGE;
+END;
+
+CREATE MICROFLOW ContactManagement.ACT_Address_Delete ($Address: ContactManagement.Address)
+BEGIN
+  DELETE $Address;
+  CLOSE PAGE;
+END;
+
+CREATE MICROFLOW ContactManagement.ACT_Note_Save ($Note: ContactManagement.Note)
+BEGIN
+  COMMIT $Note;
+  CLOSE PAGE;
+END;
+
+CREATE MICROFLOW ContactManagement.ACT_Note_Cancel ($Note: ContactManagement.Note)
+BEGIN
+  ROLLBACK $Note;
+  CLOSE PAGE;
+END;
+
+CREATE MICROFLOW ContactManagement.ACT_Note_Delete ($Note: ContactManagement.Note)
+BEGIN
+  DELETE $Note;
+  CLOSE PAGE;
+END;
+
+CREATE MICROFLOW ContactManagement.ACT_Contact_Save ($Contact: ContactManagement.Contact)
+BEGIN
+  COMMIT $Contact;
+  CLOSE PAGE;
+END;
+
+CREATE MICROFLOW ContactManagement.ACT_Contact_Cancel ($Contact: ContactManagement.Contact)
+BEGIN
+  ROLLBACK $Contact;
+  CLOSE PAGE;
+END;
+
+-- Note: ALTER PAGE's `SET Action = MICROFLOW ...` is not in the grammar — SET
+-- takes simple values only. REPLACE the whole button instead.
+
+ALTER PAGE ContactManagement.Address_NewEdit {
+  REPLACE btnSave WITH {
+    ACTIONBUTTON btnSave (
+      Caption: 'Save',
+      Action: MICROFLOW ContactManagement.ACT_Address_Save(Address: $Address),
+      ButtonStyle: Primary
+    )
+  };
+  REPLACE btnCancel WITH {
+    ACTIONBUTTON btnCancel (
+      Caption: 'Cancel',
+      Action: MICROFLOW ContactManagement.ACT_Address_Cancel(Address: $Address)
+    )
+  };
+  REPLACE btnDelete WITH {
+    ACTIONBUTTON btnDelete (
+      Caption: 'Delete',
+      Action: MICROFLOW ContactManagement.ACT_Address_Delete(Address: $Address),
+      ButtonStyle: Danger
+    )
+  };
+};
+
+ALTER PAGE ContactManagement.Note_NewEdit {
+  REPLACE btnSave WITH {
+    ACTIONBUTTON btnSave (
+      Caption: 'Save',
+      Action: MICROFLOW ContactManagement.ACT_Note_Save(Note: $Note),
+      ButtonStyle: Primary
+    )
+  };
+  REPLACE btnCancel WITH {
+    ACTIONBUTTON btnCancel (
+      Caption: 'Cancel',
+      Action: MICROFLOW ContactManagement.ACT_Note_Cancel(Note: $Note)
+    )
+  };
+  REPLACE btnDelete WITH {
+    ACTIONBUTTON btnDelete (
+      Caption: 'Delete',
+      Action: MICROFLOW ContactManagement.ACT_Note_Delete(Note: $Note),
+      ButtonStyle: Danger
+    )
+  };
+};
+
+ALTER PAGE ContactManagement.Contact_NewEdit {
+  REPLACE btnSave WITH {
+    ACTIONBUTTON btnSave (
+      Caption: 'Save',
+      Action: MICROFLOW ContactManagement.ACT_Contact_Save(Contact: $Contact),
+      ButtonStyle: Primary
+    )
+  };
+  REPLACE btnCancel WITH {
+    ACTIONBUTTON btnCancel (
+      Caption: 'Cancel',
+      Action: MICROFLOW ContactManagement.ACT_Contact_Cancel(Contact: $Contact)
+    )
+  };
+};

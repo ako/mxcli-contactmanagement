@@ -1,0 +1,27 @@
+-- Stop the "Edit" link running into the row text.
+--
+-- Rendered as "…, London United KingdomEdit" and "…re: Menabrea.Edit": a
+-- dynamictext (RenderMode Text, a <span>) followed by an inline linkbutton
+-- concatenates with no separator. This is the same MDL-WIDGET15 problem the
+-- checker flagged on the overview page for two adjacent dynamictexts — it does
+-- not flag the dynamictext + linkbutton pair, but it renders just as badly.
+--
+-- Fix: give the text its own block-level container, exactly as the overview rows
+-- already do.
+
+ALTER PAGE ContactManagement.Contact_NewEdit {
+  REPLACE txtAddressLine WITH {
+    CONTAINER cntAddressText {
+      DYNAMICTEXT txtAddressLine (
+        Content: '{1} — {2} {3}, {4} {5} {6}',
+        ContentParams: [{1} = AddressType, {2} = Street, {3} = HouseNumber,
+                        {4} = PostalCode, {5} = City, {6} = Country]
+      )
+    }
+  };
+  REPLACE txtNoteText WITH {
+    CONTAINER cntNoteText {
+      DYNAMICTEXT txtNoteText (Content: '{1}', ContentParams: [{1} = NoteText])
+    }
+  };
+};

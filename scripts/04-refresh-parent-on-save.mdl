@@ -1,0 +1,42 @@
+-- Refresh the contact after a child is saved.
+--
+-- Why: with the popup closing correctly and the child committed correctly, the
+-- address/note list on the contact page still read "No items found" until the
+-- contact was closed and reopened — the client had no reason to re-query the
+-- association. Committing the parent with REFRESH tells it to.
+--
+-- Verified in a browser and in the database: the child rows were present and
+-- correctly associated (OQL confirmed Street/City and NoteText against
+-- LastName='Lovelace') while the on-screen list still said "No items found".
+
+CREATE OR REPLACE MICROFLOW ContactManagement.ACT_Address_Save ($Address: ContactManagement.Address)
+BEGIN
+  COMMIT $Address;
+  RETRIEVE $Contact FROM $Address/ContactManagement.Address_Contact;
+  COMMIT $Contact REFRESH;
+  CLOSE PAGE;
+END;
+
+CREATE OR REPLACE MICROFLOW ContactManagement.ACT_Address_Delete ($Address: ContactManagement.Address)
+BEGIN
+  RETRIEVE $Contact FROM $Address/ContactManagement.Address_Contact;
+  DELETE $Address;
+  COMMIT $Contact REFRESH;
+  CLOSE PAGE;
+END;
+
+CREATE OR REPLACE MICROFLOW ContactManagement.ACT_Note_Save ($Note: ContactManagement.Note)
+BEGIN
+  COMMIT $Note;
+  RETRIEVE $Contact FROM $Note/ContactManagement.Note_Contact;
+  COMMIT $Contact REFRESH;
+  CLOSE PAGE;
+END;
+
+CREATE OR REPLACE MICROFLOW ContactManagement.ACT_Note_Delete ($Note: ContactManagement.Note)
+BEGIN
+  RETRIEVE $Contact FROM $Note/ContactManagement.Note_Contact;
+  DELETE $Note;
+  COMMIT $Contact REFRESH;
+  CLOSE PAGE;
+END;
