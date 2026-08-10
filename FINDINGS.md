@@ -78,3 +78,80 @@ started local PostgreSQL, created role `mendix` and database `contactmanagement`
 (name derived from the `.mpr`), at `127.0.0.1:5432`.
 
 *Verified:* command output `Database ready: contactmanagement (user "mendix")`.
+
+### Blank app boots clean — HTTP 200 on the first `run --local`
+
+`./mxcli run --local -p ContactManagement.mpr` → cold build ~10-15s, web client
+bundled in 7.6s, `Runtime started; app serving at http://127.0.0.1:8080/`.
+
+*Verified:* `curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/` → `200`,
+and the response body is the Mendix index page.
+
+### Security is Off out of the box — matches the brief, but the roles are still there
+
+`SHOW PROJECT SECURITY` reports `Security Level: Off`, which is what this app wants.
+Worth knowing that the blank template *still ships* two user roles (`Administrator`,
+`User`), demo users enabled, and module roles wired into `MyFirstModule` /
+`FeedbackModule`. They are inert while the level is `Off`, so nothing needs deleting
+— but do not read "2 user roles" from `SHOW USER ROLES` as "security is on".
+
+Command notes: `SHOW SECURITY;` is **not** valid on its own — it parses as the start
+of `SHOW SECURITY MATRIX` and fails with
+`Parse error: line 1:52 missing MATRIX at ';'`. The two working forms are
+`SHOW PROJECT SECURITY;` (level, strict mode, demo users, password policy) and
+`SHOW SECURITY MATRIX;` (page/microflow access per module role).
+
+*Verified:* all three commands run; the error text above is the literal output.
+
+### `SHOW SETTINGS` reports Hsqldb, but the app actually runs on PostgreSQL
+
+`SHOW SETTINGS` prints `Configuration 'Default' | Hsqldb, db=default, http=8080` —
+that is the *model's* stored configuration, untouched by `--ensure-db`. The actual
+run uses the PostgreSQL database `contactmanagement` that `--ensure-db` provisioned;
+`run --local` overrides the connection at boot rather than editing the model. Do not
+"fix" the model setting to match — it would just make the checked-in project
+environment-specific.
+
+*Verified:* `--ensure-db` created and reported the Postgres database while the model
+still reads Hsqldb, and the app boots and serves against it.
+
+### Lint baseline on a blank project is not zero
+
+`./mxcli lint` on the untouched template reports **7 issues: 0 errors, 0 warnings,
+7 info** — all against the shipped `MyFirstModule` (page naming convention, missing
+documentation, `MyFirstLogic` uncalled and unprefixed). Useful as the "before"
+number: new lint output should be compared against 7, not 0.
+
+*Verified:* full lint run, output tail recorded above.
+
+### Hub preview works, and it is GitHub-gated
+
+`MXCLI_HUB_KEY` **is** set in this environment, so step 9 applies. Ran:
+
+```bash
+./mxcli run --hub https://hub.mxcli.org -p ContactManagement.mpr
+```
+
+It reverse-tunnels :8080 out and derives the subdomain from the `.mpr` name plus the
+git branch:
+`https://contactmanagement-claude-mendix-app-provisioning-ca06ft.mxcli.org`
+
+Two things to expect:
+
+- The URL is **branch-derived**, so it changes when the branch changes. A long branch
+  name makes a long hostname.
+- Hitting it unauthenticated returns **302 → `hub.mxcli.org/auth/github/login`**, not
+  the app. That is the hub's access gate, not a broken tunnel — a browser session that
+  logs in with GitHub gets through. (Following the redirect from inside this container
+  ends in a 403 at `github.com/login/oauth/authorize`; that is the agent proxy
+  blocking the OAuth page, and says nothing about the preview.)
+
+*Verified:* local `curl` → 200 at the same moment the public URL → 302, so the
+runtime is up and the tunnel is carrying traffic.
+
+### Port 8080 must be free before a second `run`
+
+`--hub` implies `--local` and binds the same 8080, so the plain local run has to be
+stopped first or the second boot collides. Relevant to a future solution layout —
+that is exactly what the `--app-port` / `--admin-port` / `--serve-port` offsets are
+for.
