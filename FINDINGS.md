@@ -447,3 +447,42 @@ names matches nothing. Jetty request timing is separate:
 `jetty_connections_request_seconds_{sum,count,max}` — and it measures *connection*
 lifetime, so a "2.7 s max" on a keep-alive connection is not a 2.7 s request; do not
 read it as latency.
+
+### Flamechart: an OTLP collector had to be built, and the spans were worth it
+
+`--trace` (console exporter) is useless for a flame chart — it drops timestamps and
+parent span IDs, as the skill warns. `--trace-otlp` needs a collector, and there is
+none in this container, so `scripts/otlp-collector.js` is a ~130-line dependency-free
+Node OTLP/HTTP receiver: it hand-decodes the protobuf wire format (the Java agent
+speaks `http/protobuf`; the Java OTLP exporter does **not** support `http/json`, so
+JSON is not an escape route) and appends one JSON object per span to `spans.jsonl`.
+Field numbers used: Span{1 traceId, 2 spanId, 4 parentSpanId, 5 name, 7 start, 8 end,
+9 attributes}. It answers 200 with an empty body, which is a valid
+`ExportTraceServiceResponse`.
+
+What the traces showed, with the default span filters left on:
+
+| | Retrieve span | SQL inside it | Off-database |
+|---|---|---|---|
+| Typical contact, Address list | 68.5 ms | 8.7 ms | 59.9 ms |
+| Typical contact, Note list | 64.6 ms | 5.5 ms | 59.1 ms |
+| Heavy contact, Address list (300) | 130.2 ms | 11.2 ms | 119.0 ms |
+| Heavy contact, Note list (2,003) | **192.9 ms** | **31.0 ms** | **161.9 ms** |
+
+So the database is 16% of the retrieve at worst. The unbounded association read costs
+mostly *runtime object materialisation*, not query time — which the metrics-and-SQL
+pass could not have told me, because both signals said "the queries are fast".
+
+Two structural facts the flamechart made visible and nothing else did:
+
+- **The page issues two concurrent requests**, one per listview, in separate traces.
+  Wall clock is the slower lane (275.3 ms), not the sum — and the Note list is the
+  critical path on the heavy contact while the Address list is on the typical one.
+- **Most spans collected are not the page at all.** Of 55 spans in the heavy-contact
+  window, 33 were `SELECT contactmanagement.system$queuedtask` from the background
+  task-queue poller, plus `Call queued task ClusterManagement-CleanupProcessedTasks`.
+  Exactly the "largest DB consumer belongs to no microflow" case the skill describes.
+
+Caveat worth carrying: with default span filters the interior of a retrieve is not
+broken down, so "off-database" is inferred by subtraction (retrieve span minus its
+JDBC children), not directly measured.
