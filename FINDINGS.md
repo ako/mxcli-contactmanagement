@@ -352,3 +352,98 @@ line.
 `mxcli check` → `mxcli exec` → **`mxcli run --local` (the real build)** → **look at it
 in a browser**. Steps 3 and 4 are where every single defect in this session was found;
 steps 1 and 2 caught none of them. Budget for that.
+
+---
+
+## 2026-08-10 — Runtime observability: where the time actually goes
+
+Method (from `.ai-context/skills/analyze-runtime.md`): seed realistic data, run with
+`--metrics`, diff the Prometheus counters around each interaction, raise
+`ConnectionBus_Queries`/`_Retrieve` to TRACE to get the actual SQL, then
+`EXPLAIN (ANALYZE, BUFFERS)` the statements that matter. Load: **5,001 contacts,
+10,305 addresses, 17,003 notes** (`scripts/seed-perf-data.sql`), plus one deliberately
+"fat" contact with 300 addresses and 2,003 notes.
+
+### Measurement gotcha that invalidated my first run
+
+The first harness used fixed `waitForTimeout` sleeps between steps, so every reported
+duration was mostly my own sleep (a "3,062 ms" contact open was ~60 ms of work plus a
+3,000 ms sleep). Timings below wait on real signals — a field visible, a list row
+present, the dialog detached. Anyone repeating this: **never time a step that contains
+a fixed sleep.**
+
+### The headline: association reads are unbounded
+
+The contact detail page renders **20** addresses and **20** notes (Mendix listviews
+page at 20 with a "Load more" button). The server retrieves **all of them**:
+
+```sql
+SELECT … FROM "contactmanagement$note"
+ WHERE id IN (SELECT x.id FROM "contactmanagement$note" x
+              WHERE x."contactmanagement$note_contact" = ? AND NOT … IS NULL)
+-- no LIMIT, no ORDER BY
+```
+
+Measured on the fat contact: `rows=2003`, **6,051 shared buffer hits**, 3.74 ms in
+Postgres — to display 20 rows. The index is used correctly; the waste is in *what is
+asked for*, not how it is executed. Browser-side, the child lists render in **443 ms**
+for the fat contact vs **178 ms** for a normal one, on identical page structure.
+
+This is O(children), so it degrades without limit: a contact with 50,000 notes
+retrieves 50,000 objects into runtime memory on every page view.
+
+Verified: `child queries: 2, of which carry a LIMIT: 0` on both fat and normal
+contacts, from the TRACE log.
+
+### Every child save re-reads the sibling list that did not change
+
+`COMMIT $Contact REFRESH` in `ACT_Address_Save` (added in `scripts/04-…` to fix a
+stale list) refreshes the whole contact, so **saving an address re-queries all the
+notes**. Confirmed in the trace: one save produces 24–27 statements including exactly
+one full note re-read and two address re-reads. On the fat contact that is 2,003 notes
+re-read because one address changed. Correctness fix with a scaling cost — worth
+knowing before this app meets a real dataset.
+
+### The overview is paged, but the offset scan grows
+
+`SELECT … FROM "contactmanagement$contact" ORDER BY id ASC LIMIT ? OFFSET ?`,
+one query per "Load more", 21 rows each. Efficient per click, but offset paging scans
+everything it skips:
+
+| Page | Plan | Execution |
+|---|---|---|
+| offset 0 | Index Scan, `rows=21`, 3 buffers | **0.079 ms** |
+| offset 4,980 | Index Scan, `rows=5001`, 100 buffers | **1.781 ms** (22×) |
+
+Reaching the end of 5,001 contacts takes **~250 clicks**.
+
+### The LastName index I created has never been used
+
+```
+idx_contactmanagement$contact_lastname_asc | idx_scan = 2
+contactmanagement$contact_pkey             | idx_scan = 27410
+```
+
+Both of those 2 scans were my own `EXPLAIN` statements. The listview declares no sort
+order, so Mendix sorts by `id` — meaning contacts appear in **insertion order, not
+alphabetically** (wrong for an address book), and the index is pure write-side cost.
+`INDEX (LastName)` in the entity does not make anything sort by LastName; the *widget*
+has to ask for it.
+
+### What is NOT a bottleneck
+
+- **Postgres.** Every statement measured is under 4 ms, most under 0.2 ms, all using
+  indexes. At this scale the database is nowhere near the constraint.
+- **The overview's 5,001 rows.** It never loads them — `LIMIT 21` from the first paint.
+- **Session bootstrap.** The `system$user` / `userrole` / `grantableroles` / `language`
+  / `timezone` reads on first page load are once per session, not per page.
+
+### Metric names differ from the skill's example
+
+`analyze-runtime.md` greps `connectionbus_|handler_requests|sessions_`; the actual
+families are prefixed **`mx_runtime_stats_`** (e.g.
+`mx_runtime_stats_connectionbus_selects_total`). An anchored regex on the documented
+names matches nothing. Jetty request timing is separate:
+`jetty_connections_request_seconds_{sum,count,max}` — and it measures *connection*
+lifetime, so a "2.7 s max" on a keep-alive connection is not a 2.7 s request; do not
+read it as latency.
