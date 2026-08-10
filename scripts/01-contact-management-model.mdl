@@ -1,0 +1,246 @@
+-- ContactManagement — domain model, logic, pages and navigation.
+--
+-- Security is Off for this app, so there are no module roles and no entity
+-- access rules here by design.
+
+-- ── Module ─────────────────────────────────────────────────────────────────
+CREATE MODULE ContactManagement;
+
+-- ── Enumeration ────────────────────────────────────────────────────────────
+CREATE ENUMERATION ContactManagement.AddressType (
+  Home   'Home',
+  Work   'Work',
+  Postal 'Postal',
+  Other  'Other'
+);
+
+-- ── Entities ───────────────────────────────────────────────────────────────
+CREATE PERSISTENT ENTITY ContactManagement.Contact (
+  FirstName : String(100),
+  LastName  : String(100) NOT NULL ERROR 'A last name is required.',
+  Company   : String(200),
+  JobTitle  : String(100),
+  Email     : String(200),
+  Phone     : String(50),
+  Mobile    : String(50)
+)
+INDEX (LastName)
+COMMENT 'A person in the address book.';
+
+CREATE PERSISTENT ENTITY ContactManagement.Address (
+  AddressType : Enumeration(ContactManagement.AddressType),
+  Street      : String(200),
+  HouseNumber : String(20),
+  PostalCode  : String(20),
+  City        : String(100),
+  Region      : String(100),
+  Country     : String(100),
+  IsPrimary   : Boolean DEFAULT false
+)
+COMMENT 'One address for a contact; a contact may have several.';
+
+CREATE PERSISTENT ENTITY ContactManagement.Note (
+  NoteText : String(500) NOT NULL ERROR 'An empty note is not worth keeping.'
+)
+COMMENT 'A short note about a contact. Ordered by the system createdDate.';
+
+-- ── Associations ───────────────────────────────────────────────────────────
+CREATE ASSOCIATION ContactManagement.Address_Contact
+  FROM ContactManagement.Address TO ContactManagement.Contact
+  TYPE Reference OWNER Default
+  DELETE_BEHAVIOR CASCADE;
+
+CREATE ASSOCIATION ContactManagement.Note_Contact
+  FROM ContactManagement.Note TO ContactManagement.Contact
+  TYPE Reference OWNER Default
+  DELETE_BEHAVIOR CASCADE;
+
+-- ── Popup pages (created first: the microflows below open them) ────────────
+CREATE PAGE ContactManagement.Address_NewEdit
+  (
+    Title: 'Address',
+    Layout: Atlas_Core.PopupLayout,
+    Params: { $Address: ContactManagement.Address }
+  )
+{
+  LAYOUTGRID lgAddress { ROW rowAddress { COLUMN colAddress (DesktopWidth: autofill) {
+  DATAVIEW dvAddress (DataSource: $Address) {
+    COMBOBOX cbType     (Label: 'Type',        Attribute: AddressType)
+    TEXTBOX  txtStreet  (Label: 'Street',      Attribute: Street)
+    TEXTBOX  txtNumber  (Label: 'Number',      Attribute: HouseNumber)
+    TEXTBOX  txtPostal  (Label: 'Postal code', Attribute: PostalCode)
+    TEXTBOX  txtCity    (Label: 'City',        Attribute: City)
+    TEXTBOX  txtRegion  (Label: 'Region',      Attribute: Region)
+    TEXTBOX  txtCountry (Label: 'Country',     Attribute: Country)
+    CHECKBOX chkPrimary (Label: 'Primary address', Attribute: IsPrimary)
+
+    FOOTER footerAddress {
+      ACTIONBUTTON btnSave   (Caption: 'Save',   Action: SAVE_CHANGES, ButtonStyle: Primary)
+      ACTIONBUTTON btnCancel (Caption: 'Cancel', Action: CANCEL_CHANGES)
+      ACTIONBUTTON btnDelete (Caption: 'Delete', Action: DELETE, ButtonStyle: Danger)
+    }
+  }
+  } } }
+};
+
+CREATE PAGE ContactManagement.Note_NewEdit
+  (
+    Title: 'Note',
+    Layout: Atlas_Core.PopupLayout,
+    Params: { $Note: ContactManagement.Note }
+  )
+{
+  LAYOUTGRID lgNote { ROW rowNote { COLUMN colNote (DesktopWidth: autofill) {
+  DATAVIEW dvNote (DataSource: $Note) {
+    TEXTAREA txtNote (Label: 'Note', Attribute: NoteText)
+
+    FOOTER footerNote {
+      ACTIONBUTTON btnSave   (Caption: 'Save',   Action: SAVE_CHANGES, ButtonStyle: Primary)
+      ACTIONBUTTON btnCancel (Caption: 'Cancel', Action: CANCEL_CHANGES)
+      ACTIONBUTTON btnDelete (Caption: 'Delete', Action: DELETE, ButtonStyle: Danger)
+    }
+  }
+  } } }
+};
+
+-- ── Microflows ─────────────────────────────────────────────────────────────
+-- A child object has to be created with its association to the contact already
+-- set, otherwise it is orphaned the moment it is committed.
+
+CREATE MICROFLOW ContactManagement.ACT_Address_New ($Contact: ContactManagement.Contact)
+BEGIN
+  $NewAddress = CREATE ContactManagement.Address (
+    ContactManagement.Address_Contact = $Contact,
+    AddressType = ContactManagement.AddressType.Home
+  );
+  SHOW PAGE ContactManagement.Address_NewEdit ($Address = $NewAddress);
+END;
+
+CREATE MICROFLOW ContactManagement.ACT_Note_New ($Contact: ContactManagement.Contact)
+BEGIN
+  $NewNote = CREATE ContactManagement.Note (
+    ContactManagement.Note_Contact = $Contact
+  );
+  SHOW PAGE ContactManagement.Note_NewEdit ($Note = $NewNote);
+END;
+
+-- ── Contact detail ─────────────────────────────────────────────────────────
+CREATE PAGE ContactManagement.Contact_NewEdit
+  (
+    Title: 'Contact',
+    Layout: Atlas_Core.Atlas_Default,
+    -- A page with a parameter needs a {Param} segment in its URL, or mxbuild
+    -- fails with CE5601. 'mxcli check' does not catch this.
+    Url: 'contact/{Contact}',
+    Params: { $Contact: ContactManagement.Contact }
+  )
+{
+  LAYOUTGRID lgContact { ROW rowContact { COLUMN colContact (DesktopWidth: autofill) {
+  DATAVIEW dvContact (DataSource: $Contact) {
+    LAYOUTGRID lgDetails {
+      ROW rowNames {
+        COLUMN colLeft (DesktopWidth: 6) {
+          TEXTBOX txtFirstName (Label: 'First name', Attribute: FirstName)
+          TEXTBOX txtLastName  (Label: 'Last name',  Attribute: LastName)
+          TEXTBOX txtCompany   (Label: 'Company',    Attribute: Company)
+          TEXTBOX txtJobTitle  (Label: 'Job title',  Attribute: JobTitle)
+        }
+        COLUMN colRight (DesktopWidth: 6) {
+          TEXTBOX txtEmail  (Label: 'Email',  Attribute: Email)
+          TEXTBOX txtPhone  (Label: 'Phone',  Attribute: Phone)
+          TEXTBOX txtMobile (Label: 'Mobile', Attribute: Mobile)
+        }
+      }
+    }
+
+    CONTAINER cntAddresses (Class: 'contact-addresses') {
+      ACTIONBUTTON btnNewAddress (
+        Caption: 'Add address',
+        Action: MICROFLOW ContactManagement.ACT_Address_New(Contact: $Contact)
+      )
+      LISTVIEW lstAddresses (DataSource: $currentObject/ContactManagement.Address_Contact) {
+        CONTAINER cntAddressRow {
+          DYNAMICTEXT txtAddressLine (
+            Content: '{1} — {2} {3}, {4} {5} {6}',
+            ContentParams: [{1} = AddressType, {2} = Street, {3} = HouseNumber,
+                            {4} = PostalCode, {5} = City, {6} = Country]
+          )
+          LINKBUTTON btnEditAddress (
+            Caption: 'Edit',
+            Action: SHOW_PAGE ContactManagement.Address_NewEdit(Address: $currentObject)
+          )
+        }
+      }
+    }
+
+    CONTAINER cntNotes (Class: 'contact-notes') {
+      ACTIONBUTTON btnNewNote (
+        Caption: 'Add note',
+        Action: MICROFLOW ContactManagement.ACT_Note_New(Contact: $Contact)
+      )
+      LISTVIEW lstNotes (DataSource: $currentObject/ContactManagement.Note_Contact) {
+        CONTAINER cntNoteRow {
+          DYNAMICTEXT txtNoteText (Content: '{1}', ContentParams: [{1} = NoteText])
+          LINKBUTTON btnEditNote (
+            Caption: 'Edit',
+            Action: SHOW_PAGE ContactManagement.Note_NewEdit(Note: $currentObject)
+          )
+        }
+      }
+    }
+
+    FOOTER footerContact {
+      ACTIONBUTTON btnSave   (Caption: 'Save',   Action: SAVE_CHANGES, ButtonStyle: Primary)
+      ACTIONBUTTON btnCancel (Caption: 'Cancel', Action: CANCEL_CHANGES)
+    }
+  }
+  } } }
+};
+
+-- ── Contact overview (landing page) ────────────────────────────────────────
+CREATE PAGE ContactManagement.Contact_Overview
+  (
+    Title: 'Contacts',
+    Layout: Atlas_Core.Atlas_Default,
+    Url: 'contacts'
+  )
+{
+  CONTAINER cntToolbar (Class: 'contacts-toolbar') {
+    ACTIONBUTTON btnNewContact (
+      Caption: 'New contact',
+      Action: CREATE_OBJECT ContactManagement.Contact THEN SHOW_PAGE ContactManagement.Contact_NewEdit,
+      ButtonStyle: Primary
+    )
+  }
+
+  LISTVIEW lstContacts (DataSource: DATABASE ContactManagement.Contact) {
+    CONTAINER cntContactRow {
+      CONTAINER cntContactName {
+        DYNAMICTEXT txtContactName (
+          Content: '{1} {2}',
+          ContentParams: [{1} = FirstName, {2} = LastName],
+          RenderMode: H4
+        )
+      }
+      CONTAINER cntContactMeta {
+        DYNAMICTEXT txtContactMeta (
+          Content: '{1} · {2} · {3}',
+          ContentParams: [{1} = Company, {2} = Email, {3} = Phone]
+        )
+      }
+      LINKBUTTON btnOpenContact (
+        Caption: 'Open',
+        Action: SHOW_PAGE ContactManagement.Contact_NewEdit(Contact: $currentObject)
+      )
+    }
+  }
+};
+
+-- ── Navigation ─────────────────────────────────────────────────────────────
+CREATE OR REPLACE NAVIGATION Responsive
+  HOME PAGE ContactManagement.Contact_Overview
+  MENU (
+    -- Icon names are verified against DESCRIBE ICON COLLECTION Atlas_Core.Atlas;
+    -- 'mxcli check' does not resolve them, but mxbuild rejects unknown ones (CE1613).
+    MENU ITEM 'Contacts' PAGE ContactManagement.Contact_Overview ICON Atlas_Core.Atlas.contacts;
+  );

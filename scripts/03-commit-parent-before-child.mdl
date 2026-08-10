@@ -1,0 +1,29 @@
+-- Commit the contact before creating a child of it.
+--
+-- Why: verified in a browser — adding an address or a note to a contact that had
+-- never been saved committed the child but left it invisible in the list on the
+-- contact page ("No items found"), because the association pointed at an
+-- uncommitted Contact. Committing the parent first makes "Add address" and
+-- "Add note" behave the same whether or not the contact has been saved yet.
+--
+-- The trade-off, accepted deliberately: pressing Cancel on a brand-new contact
+-- after adding an address leaves the contact itself saved.
+
+CREATE OR REPLACE MICROFLOW ContactManagement.ACT_Address_New ($Contact: ContactManagement.Contact)
+BEGIN
+  COMMIT $Contact;
+  $NewAddress = CREATE ContactManagement.Address (
+    ContactManagement.Address_Contact = $Contact,
+    AddressType = ContactManagement.AddressType.Home
+  );
+  SHOW PAGE ContactManagement.Address_NewEdit ($Address = $NewAddress);
+END;
+
+CREATE OR REPLACE MICROFLOW ContactManagement.ACT_Note_New ($Contact: ContactManagement.Contact)
+BEGIN
+  COMMIT $Contact;
+  $NewNote = CREATE ContactManagement.Note (
+    ContactManagement.Note_Contact = $Contact
+  );
+  SHOW PAGE ContactManagement.Note_NewEdit ($Note = $NewNote);
+END;
